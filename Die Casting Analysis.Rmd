@@ -1,0 +1,538 @@
+---
+title: "Case Study"
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Presentation of the case study
+## EasyKost
+A common approach to determine the cost of products is the **should cost** method.
+It consists in estimating what a product should cost based on materials, labor, overhead, and profit margin. Although this strategy is very accurate, it has the drawback of being tedious and it requires expert knowledge of industrial technologies and processes. 
+To get a quick estimation, it is possible to build a statistical model to predict the cost of products given their characteristics.
+With such a model, it would no longer be necessary to be an expert or to wait several days to assess the impact of a design modification, a change in supplier or a change in production site. Before builing a model, it is important to explore the data which is the aim of this case study.
+
+## Die Casting
+This study was carried out for a company that sells parts for the automotive industry. They build many parts themselves, but because they don't have foundries, they don't make die-cast parts and they need to buy them. 
+To bid on tenders, they usually ask their supplier how much the die-cast part will cost them. However, suppliers may take time to respond and the company may lose the tender. Therefore, they want to try to use the data to estimate the price of die-casting accurately and quickly without consulting the supplier, and thus be able to respond to the call for tenders.
+
+Some explanation for some variables.
+"EXW cost" : unit price, (ex-works price: no transport) 
+"Yearly Volume":  Annual order volume: number of items ordered.
+                   
+This allows for an identical line in the data except for the volume to have a different price, since in general, the purchase volume is an important cost-driver.
+
+**1) Import and summary the data.**
+
+```{r, warning = FALSE, cache.comments=TRUE,message=FALSE}
+# Importing the database + useful packages
+library(readxl)
+diecasting <- read_excel("~/Dropbox/Machine Learning I - X-HEC/Séance 3 -Missing Values/CaseStudyHomework/diecasting.xlsx")
+library(dplyr)
+library(FactoMineR)
+library(ggplot2)
+library(plotly)
+library(mvtnorm)
+library(FactoInvestigate)
+library(knitr)
+library(corrplot)
+library(fossil)
+library(MASS)
+```
+
+```{r}
+diecasting <-as.data.frame(diecasting[,c(4:ncol(diecasting))])
+diecasting[, which(sapply(diecasting, is.character))] <-lapply(diecasting[, which(sapply(diecasting, is.character))], factor)
+summary(diecasting)
+```
+
+
+**2)** _We start with univariate and bivariate descriptive statistics. Using appropriate plot(s) or summaries answer the following questions._
+
+**2.1** How is the distribution of the cost? Comment your plot with respect to the quartiles of the cost.
+
+```{r}
+#Histogram of the distribution of the cost - the default number of bins allows to get a nice representation of the data.
+ggplot(diecasting, aes(x = `EXW cost`, y =..density..))+geom_histogram()
+# Use density to get an estimator of the density
+
+# Wiskers plot of the distribution of the cost.
+ggplot(diecasting, aes(x = "Cost", y =`EXW cost`))+geom_boxplot()
+```
+
+The wiskers and the histogram show that the `Cost` is relatively concentrated around its median (12.852). However, a significant number of relatively high values of `Cost` also appear in the data set that drives the mean (15.54). The histogram could also suggests that the `Cost` is following a gaussian distribution but with potentially outliers or that the distribution has heavy tail. 
+
+**2.2** Which are the most frequent suppliers? 
+
+```{r}
+ggplot(data=diecasting, aes (x = reorder(Supplier, Supplier, length))) + geom_bar() + 
+  coord_flip() + xlab("Supplier")
+clev <-ggplot(diecasting, aes (x = reorder(Supplier, Supplier, length))) + geom_point(stat = "count") + coord_flip() +
+  theme(panel.grid.major.x = element_blank() ,
+  panel.grid.major.y = element_line(linetype = "dotted", color = "darkgray")) + xlab("")
+ggplotly(clev)
+```
+```{r}
+kable(sort(table(diecasting$Supplier), decreasing=TRUE))
+```
+  
+The most frequent supplier is Les espaces, followed by Excalibur and OneUp.  
+
+**2.3** _Does the cost depend on the Net weight? on Yearly Volume?  Does this make sense to you? Can you explain (from a business point of view) the form of the relationship for high volume values.
+
+Let's plot `cost` vs. `Weight`. We'll add a smoother to show if there exists any trend (we're not assuming that there exists a priori a linear relationship).
+```{r}
+ggplot(diecasting, aes(x=`Net Weight (kg)`, y= `EXW cost`)) +
+    geom_point(shape=1) +
+    geom_smooth(method = 'loess')
+```
+
+Method = "loess" is a smoother, basically it fits the best curve in the data and allows to see the trend. It is a method of non-parametric regression. 
+The smoother also points to a linear relationship between both variables.
+The relationship does not seem affected by the extreme points.
+For some datsets,  one could also apply some transformations in order to get more homogeneous data. 
+
+From this graph, we clearly see that there exits a relationship between `Weight` and `cost`. The general trend is The greater the `Weight`, the higher the `cost`. A positive relationship between cost and weight makes sense in the real world. A heavier product will require more materials and possibly more labour to produce.
+
+Let's plot `cost` vs. `Volume`.
+```{r}
+ggplot(diecasting, aes(x=`Yearly Volume`, y=`EXW cost`)) +
+    geom_point(shape=1) +
+    geom_smooth()
+```
+
+
+From this graph, we see that there exits a relationship between `Yearly Volume` and `cost`. The general trend is: The greater the `Yearly Volume`, the lower the `cost`.
+
+In general when the volume increases the price decreases but it can depend on the storage capacity of the factory - if it cannot produce all the parts, it must buy storage space and this explains why the price does not decrease with the volume.
+
+It is very important to use both graphical outputs as well as numerical indicators. One needs also to compute the correlation between the cost and Weight (and Volume) to have a measure of the intensity of the linear relationship. See "Anscombe's quartet" to see how important it is to associate graphs and indicators and also that correlation coefficient is only an indicator of the linear relationship. https://julierennes.github.io/MAP573/graphics.html
+
+In fact, measure of dependencies (not linear) exist. One is the dCov coefficient available in the R package energy.
+
+
+```{r}
+cor(diecasting$`EXW cost`, diecasting$`Net Weight (kg)`)
+cor(diecasting$`EXW cost`, diecasting$`Yearly Volume`)
+```
+
+It is also possible to test the significance of the relationship using a test:
+
+```{r}
+cor.test(diecasting$`EXW cost`, diecasting$`Net Weight (kg)`)
+cor.test(diecasting$`EXW cost`, diecasting$`Yearly Volume`)
+```
+
+The correlation test states that the correlation between the cost and weight variables is statistically significant (different from zero). It produces a correlation coefficient of 0.505, and a 95% confidence interval of [0.397, 0.599]. 
+
+**2.4** Let $n=25$.  Generate variables  $X$ and $Y$ by drawing observations from independent gaussian distributions with mean $\mu=(0)_{1 \times 2}$ and covariance matrix $\text{Id}_{2 \times 2}$. Compute the value of the correlation coefficient. Repeat the process 100 times and take the quantile at 95% of this empirical distribution (under the null hypothesis of no linear relationship) of the correlation coefficient.  Comment the results. What should be learned from this experience?
+
+```{r}
+calc_rv = function(n, N){
+  mu_q = rep(0,2)
+  sigma_q = diag(2)
+  # Sample
+rvsc = vector(length = N, mode = "numeric")
+
+  for( i in 1:N ){
+    ## X
+    X = rmvnorm(n = n, mean = mu_q, sigma = sigma_q)
+     # cor
+     rvsc[i] = cor(X[,1],X[, 2])
+  }
+  # 95% Quantile
+  return( list( resic= quantile(rvsc, c(0.025, 0.975))))
+}
+sol <- calc_rv(25, 10000)
+sol$resic
+```
+
+The value of the correlation coefficient depends on the sample size and even under the null hypothesis of no association, the confidence interval at 95% is [-0.4, 0.4]. 
+
+This simulation mimics a statistical test. It is very useful to use simulation tests when the explicit law of the estimator is not available under H0. So in practice, if we have a sample of data of size 25 and we calculate the correlation between two  variables (centered and scale), we will compare the observed value of the correlation coefficient (its absolute value) to 0.33. If we have a higher value, then we can reject the null hypothesis of non-correlation between the two variables. 
+
+Let's study the impact of $n$ on the results. 
+
+```{r}
+# Parameters
+N = 10000
+n = 25
+q = 2
+# Function
+calc_rv = function(n, N, q){
+  mu_q = rep(0,q)
+  sigma_q = diag(q)
+  
+  # Sample
+  rvs = vector(length = N, mode = "numeric")
+  for( i in 1:N ){
+    ## X
+    X = rmvnorm(n = n, mean = mu_q, sigma = sigma_q)
+     # cor
+    rvs[i] = (cor(X[,1],X[, 2]))
+  }
+  # 95% Quantile
+  return( quantile(rvs, .975) )
+}
+
+ns = c(25,50,100, 500, 1000, 5000, 10000)
+rvs = matrix(0.0, nrow = length(ns), ncol = 1 )
+# Fill matrix
+for( i in 1:length(ns) ){
+ 
+    rvs[i,1] = calc_rv(n=ns[i],N=N, q=2)
+
+}
+# Print
+rownames(rvs) = paste0("n=", ns)
+colnames(rvs) = "cor"
+rvs
+```
+
+The quantile tends towards 0 when n increases. The message here is that even if the variables are uncorrelated, the empirical value of the correlation coefficient depends on the sample size (Extreme case: between two points, a line can be drawn). We can thus have a non-significant relationship even when we have a coefficient that is not close to 0. Hence the importance of making a test to know if the relationship is significantly or not different from zero.
+
+From the preceding results, a testing procedure to test the significance of the association between $X$ and $Y$ is necessary. One usually sets up the hypothesis test by taking
+
+H0, $\rho=0$ there is no linear relationship between the two variables
+H1, $\rho>0$ there is a linear relationship between the two variables
+The fact that $\rho=0$ (which corresponds to the population covariance $\sigma_{XY}=0$) does not necessarily imply independence between $X$ and $Y$ (except when they are normal), only the absence of a linear relationship between them.
+
+In practice, permutation tests  are often used. Repeated permutation of the rows of one variable and computation of the statistic such as the correlation coefficient provides the distribution of the correlation coefficient under H0 - they may differ from the tests obtained with cor.test because they do not make any assumption on the distribution of the variables. 
+
+For two variables, using the sample function, we produce 10000 permutations of the rows of one variable say X and compute each time the correlation coefficient between the variable with permuted rows Xperm and $Y$, (perm=1, …, 10000). Then, we plot the histogram of the empirical distribution of the correlation coefficient. The observed value of the correlation  coefficient calculated between the initial variables $X$ and $Y$ is positioned in this distribution. The p-value is calculated using this empirical distribution, and we can compare it to the p-value given by the cor.test function. The p-value is defined as the proportion of the values that are greater or equal to the observed coefficient.
+
+```{r}
+
+nbsim = 10000
+correlation = vector(mode='numeric',length = nbsim)
+som = 0 
+x <- diecasting$`EXW cost`
+y <- diecasting$`Net Weight (kg)`
+cor.xy = cor(x,y)
+cor.xy 
+for (i in 1:nbsim) {
+  xpermut = sample(x = x, size = length(x))
+  correlation[i] = cor(x = xpermut,y=y)
+  som=som+(cor(x,y[sample(length(y))])>cor.xy)
+}
+corData = data.frame(correlation)
+ggplot(data=corData,aes(x=correlation, y =..density..))+geom_histogram(binwidth = 0.05,color='red')+geom_vline(xintercept = cor.xy,color='green')
+
+pValue = (sum(corData[,1]>cor.xy)/10000)*2 # Be careful the test is bilateral so we need to *2
+cor.test(x,y)$p.value
+```
+
+Repeated permutation of the rows of one variable and computation of the statistic such as the correlation coefficient provides the null distribution of no association. There are n! possible permutations to consider and the p-value is the proportion of the values that are greater or equal to the observed coefficient. The idea of a permutation test is really to simulate the distribution under the null hypothesis (here we break the link structure). These tests are very suitable when we do not have an explicit distribution or when we are not in the conditions of applicability of the test (distribution not verified such as the normality).
+
+**2.5** _Does the cost depend on the Cooling ? 
+
+```{r}
+ggplot(diecasting, aes(x = Cooling, y =`EXW cost`))+geom_boxplot()
+```
+
+From this graph, we observe that lower values of `cost`  are more associated  to `Air-cooled-Standard`. Boxplots are  very useful to compare the distribution of a quantitative variable for different categories of a categorical variable. However, it must be interpreted with care as other sources of variability can explained the cost and some interaction can exist.
+
+In addition, it is difficult to have a precise idea if `cost` depends on `Cooling` : Most of the median costs are close although Standard costs are smallers than the others. Some shapes present high variability making the assessemnt of the relationship more difficult. A test could be used to compare the means of the costs given the shape. This would correspond to a test coming from the analysis of variance of the variable cost on Cooling. Note however, that such tests often assume equality of variance between categories, which is not the case here.
+
+```{r}
+res_anova <- lm( `EXW cost` ~ Cooling, y =, data = diecasting)
+summary(res_anova)
+```
+
+The $p$-value associated with the Fisher test (testing the global null) is large so that the null hypothesis of no effect of Cooling on Cost can not be rejected.
+
+**2.6** _Which is the less expensive Supplier?_
+Let's plot the whiskers of `cost` vs. `Supplier`
+```{r}
+ggplot(diecasting, aes(x = `Supplier Country`, y =`EXW cost`))+geom_boxplot()
+```
+
+Regarding the median, France leads to the smallest prices. 
+
+**3)** _One important point in exploratory data analysis consists in identifying potential outliers._
+
+**3.1** Could you give points which are suspect regarding the Cost variable. Give the characteristics (other features) of the observations. We could keep them but keep in mind their presence and check if results are not too affected by these points. 
+
+```{r}
+is_outlier <- function(x) {
+  return(x < quantile(x, 0.25) - 2 * IQR(x) | x > quantile(x, 0.75) + 2 * IQR(x))
+}
+ind <- which(is_outlier(diecasting$`EXW cost`))
+kable(diecasting[ind,])
+```
+
+Boxplot is a way to identify outliers from a univariate point of view, variable per variable, other techniques (manahalobis distance) allows to identify outliers from a multivariate point of view. The idea is to ask experts whether it is outliers such as measurment errors or not (and so to delete them or correct them) and to check if they
+affect the analysis. Techniques of robust statistics exist and allow to perform analysis without being affected by outliers (minimum covariance determinant, median of means, using hubert loss, etc.).
+
+**3.2** Inspect the variable nb Threading, in views of its values of  what could you suggest? 
+
+```{r}
+summary(diecasting$`nb Threading`) 
+ggplot(diecasting)+aes(x =`nb Threading`, y = ..density..) +geom_histogram()
+```
+After plotting a the distribution of different variables, it seems that we can transform this variable as a categorical variable, with the categories 1, 2, 3 or more than 3.
+
+```{r}
+diecasting$`nb Threading` = factor(diecasting$`nb Threading`)
+levels(diecasting$`nb Threading`)[4:nlevels(diecasting$`nb Threading`)]="3&+"
+summary(diecasting$`nb Threading`)
+```
+
+**4)** _Perform a PCA on the dataset DieCast.
+
+**4.1** Explain briefly what are the aims of PCA and how categorical variables are handled?_
+
+The aim of the PCA are:
+
+1) Study the similarities between observations from a multidimensional point of view
+2) Study the correlation between variables (summarize the correlation matrix)
+3) Relate the study of observations and variables: characterize the groups of observations with variables
+4) Find synthetic variables: the Principal Component (a linear combination of the original ones) that explain most of the variability of the data set and summarize all the variables
+5) Reduce the dimensionality of the data
+
+
+Categorical data (i.e. non quantitative data) can be used as supplementary qualitative variables. They are not considered when computing the PCA, but they are kept in order to get some more insights from them.  The PCA function identifies each category of the categorical variable as a new individual and project it on the individual's graph. His coordinates are at the barycentre of the data corresponding to the categories values. 
+
+```{r}
+indquali = which(sapply(diecasting,is.factor))
+res.pca = PCA(diecasting, quali.sup=indquali, quanti.sup = ncol(diecasting), graph = FALSE)
+plot(res.pca, choix = 'ind', cex = 0.5, invisible= c("quali"))
+```
+```{r}
+plot(res.pca, choix = 'var')
+plot(res.pca, choix = 'var', axes = c(3,4))
+```
+
+1) Individual graph: The first dimension opposes observations such as 32 to the others. The second dimension opposes observations 38, 181,126.
+2) Variable graph:
+- quality of projection: We observe that most variable vectors are not very close to the correlation circle which means they are not well-projected. This can be explained by the intensity of the linear relationship that are very weak (use the function _pairs_ for instance on the quantitative variables)
+- correlation between variables: We can see that Weight, Surface are highly correlated which make sense. Weight is orthogonal to nb Cavities. 
+- correlation between variable and axes:
+The variables `Surface`, `Weight`, `weight`are highly correlated to the first dimension. The variable `nb Cavities` is highly correlated to the dimension 2 and `nb machine surface` negatively correlated.
+3) Percentage of variability:  the two first dimensions of the PCA retains 52.6% 
+4) Relation between the observation study and variable study: observation 22 and 32 take high values for all the variables highly correlated to dimension 1: there are heavy, have a large surface. Observations on the top have an important number of Cavities contrary to observations on the bottom.
+
+You should look at the output of this function:
+```{r eval=FALSE}
+Investigate(res.pca)
+```
+
+**4.2** _Compute the correlation matrix between the variables and comment it with respect to the correlation circle_.
+
+The correlation matrix is given by $S=\frac{1}{I-1}X_{scaled}^T.X_{scaled}$ where $X_{scaled}$ is the dataset (minus qualitative variables) after centering and scaling, and $I$ is the number of rows in the dataset.
+
+```{r}
+#Removing the qualitative variables
+Xquanti<-diecasting[,sapply(diecasting, is.numeric)]
+
+#If one knows the 'cor' function
+cormat <-cor(Xquanti)
+kable(round(cormat,2))
+corrplot(cormat, tl.col = "black", addCoef.col = "black", method = "color", type = "upper", diag = F)
+```
+
+The correlation circle returned by the PCA function summarizes the correlation matrix. Here we find again the high correlation between weight and surface (0.66) and the orthogonality (0.01) between volum and number of machine.
+
+**4.3**_On what kind of relationship PCA focuses? Is it a problem?_
+
+PCA focuses on linear relations between variable. One should always try linear models first (simplest models). Linear models can be seen as an approximation of non-linear model at least on some range of the data. However, we have to keep in mind that it is not possible to analyse non-linear relationship with PCA.
+
+Here the  relation are weak. 
+```{r}
+pairs(diecasting[,-indquali]) #pairplots of the data in order to vizualize the relationships
+```
+
+**4.4** _Give the the R object with the two principal components which are the synthetic variables the most correlated to all the variables._
+```{r}
+#select the coordinated of the 2 first synthetic variables obtained from the PCA, it corresponds to the F in the lecture slides
+head(res.pca$ind$coord[,1:2])
+```
+
+If you are looking for variables that summarize all the variable, they have to live in $R^n$ if $n$ is the sample size. Here,  correspond to the $F$  in the lecture slides (the variances of each column of $F$ correspond to the eigenvalues)
+
+**5)** _Clustering_ 
+
+__5.1)__ Principal components methods such as PCA is often used as a pre-processing step before applying a clustering algorithm, explain the rationale of this approach and how many components you should keep.
+
+As explained previously, PCA aims at reducing the dimensionnality of the data set while keeping as much information as possible. By performing a PCA before applying a clustering algorithm, we filter noise from the data and may expect a more "stable" clustering.
+Since the aim is clustering and not to get the best summary of the data, one usually wants to keep Q dimensions that explained 95% of the variability of the data, considering that the last 5% are noise. Here it corresponds to 5 components over the 6. 
+
+```{r}
+kable(res.pca$eig)
+```
+
+However, if all the variables are unrelated (for instance if you simulate noise) we know that the variance of each variable would be equal to 1. Here, only 2 components have variance greater than 1. Consequently other dimensions could be considered as noise. The number of components that also minimize the reconstruction error obatined by cross-validation is also equal to 2.
+
+```{r}
+aa  = estim_ncp(Xquanti)
+aa$ncp
+```
+
+Consequently, in practice, I will try clustering with 2 and with 5 PC and compare the results.
+
+Be careful with the elbow rule, indeed the shape of the barplot is highly dependent on the size of the data set (both $n$ and $p$) and for instance with $p$ greater than $n$ it is more difficult to see an elbow (see homework/lab 1 of PCA).
+
+__5.2)__ To simultaneously take into account quantitative and categorical variables in the clustering you should use the clustering on the results of the FAMD ones. FAMD stands for Factorial Analysis of Mixed Data and is a PCA dedicated to mixed data. Explain what will be the impacts of such an analysis on the results?_
+
+
+FAMD is a principal component method dedicated to explore data with both continuous and categorical variables. It can be seen roughly as a mixed between PCA and MCA. The continuous variables are scaled to unit variance and the categorical variables are transformed into dummies variables, and then scaled using the specific scaling of MCA. This ensures to balance the influence of both continous and categorical variables in the analysis. It means that both variables are on a equal foot to determine the dimensions of variability. This method allows us to study the similarities between individuals taking into account mixed variables and to study the relationships between all the variables. It also provides graphical outputs such as the representation of the individuals, the correlation circle for the continuous variables and representations of the categories of the categorical variables, and also specific graphs to visualize the associations between both type of variables.
+
+It means that the categorical variables are considered as active so that  the distances between observations are computed using this categorical variables. Two observations are close because they take similar (close) values on both quantitative and categorical data. 
+In addition for clustering, we will end up with new synthetics variables, the PC, that are quantitative variables, the most related to all the variables: the categorical and quantitatives variables. It is thus easy to apply clustering methods on the principal components since many clustering methods are dedicated to quantitative data. 
+
+__5.3)__ Perform the FAMD, and keep the principal components you want for the clustering.   
+
+```{r}
+res.famd <-FAMD(diecasting, sup.var =  c(ncol(diecasting)),ncp = Inf )
+```
+
+In order to chose the right number $Q$ of components to keep, let's plot the cumulative variability in function of `Q` the number of components kept.
+```{r}
+cumulative_inertia= as.data.frame(res.famd$eig[,3])
+ggplot(cumulative_inertia, aes(x=1:57,  y=res.famd$eig[, 3])) +geom_point(shape=1) 
+  
+  res.famd46 <-FAMD(diecasting, sup.var =  c( ncol(diecasting)),ncp = 46 )
+```
+
+In the same way, we can select 46 dimensions which correspond to $95\%$ of the variability. But also have a look at the number of dimension estimated with cross-validation.
+
+```{r, eval = FALSE}
+
+aa = estim_ncpFAMD(diecasting[, 1:(ncol(diecasting)-1)], ncp.max = 46)
+```
+
+It gives 3, but there is a change also at 9 pc, so we can keep 9. 
+```{r,}
+ res.famd9 <-FAMD(diecasting, sup.var =  c( ncol(diecasting)), ncp =  9, graph = FALSE)
+```
+
+
+__5.3)__ Perfom a kmeans algorithm on the selected principal components of FAMD. To select how many cluster you are keeping, you can represent the evolution of the ratio between/total intertia. Justify your choices.
+
+Let us plot the ratio 
+$$
+\frac{\textrm{between inertia}}{\textrm{total inertia}}
+$$
+for several runs of the K-means algorithm with different number of clusters ranging from 1 to 10. We wish to obtain a small number of clusters such that the corresponding above ratio is high enough. In that case, it would mean that a large part of the data inertia is explained by the clustering: we can reduce each observation to the centroid without losing much information. 
+```{r}
+ratio<-c()
+for (k in 1:10){
+  Q<-kmeans(res.famd46$ind$coord,k, nstart = 100)
+  ratio<-c(ratio,Q$betweens/Q$totss)
+}
+ratio<-as.data.frame(ratio)
+
+ggplot(ratio, aes(x=1:10, y=ratio)) +
+    geom_point(shape=1)
+```
+
+We then choose the  clusters with the elbow rule. Here it does not seem obvious, but we try 4 clusters. Indeed, we have only 211 observations, a too large number of cluster will lead to clusters of size 1.
+
+```{r}
+ratio<-c()
+for (k in 1:10){
+  Q<-kmeans(res.famd9$ind$coord,k, nstart = 100)
+  ratio<-c(ratio,Q$betweens/Q$totss)
+}
+ratio<-as.data.frame(ratio)
+
+ggplot(ratio, aes(x=1:10, y=ratio)) +
+    geom_point(shape=1)
+```
+
+__5.4)__ To Describe the clusters, you can use catdes function, by concatenating your dataset to the variable specifying in which cluster each observation is and indicating that you want to describe this variable (that must be as a factor).
+
+```{r}
+resk<-kmeans(res.famd46$ind$coord,4, nstart = 100)
+rescatdes <- catdes(cbind.data.frame(factor(resk$cluster), diecasting), 1)
+
+kable(rescatdes$quanti.var)
+```
+ * Comments the results and describe precisely one cluster._
+
+```{r}
+kable(rescatdes$quanti$`3`)
+```
+
+Let us focus on cluster nb 3 : one can first see that the mean of nb.Cores for this cluster is greater than the overall mean. They also have a Yearly Volume, greater than average.  On the contrary, the EXW.cost  and Surface.envelop and Net.Weight are lower than the overall means.
+See page 154-158 of the book Exploratory Multivariate Analysis by example of François Husson or the correction of the clustering lab or the (video)[https://www.youtube.com/watch?v=w-EGV6xExWw&t=559s&index=27&list=PLnZgp6epRBbTsZEFXi_p6W48HhNyqwxIu] 
+to give a precise description of the cluster.
+
+This is in agreement with the FAMD interpretation and the position of the cluster on the FAMD map.
+
+**5.5)** If someone asks you why you have selected k components to perform the clustering and not k+1 or k-1, what is your answer? (could you suggest a strategy to assess the stability of the approach?  are there many differences between the clustering obtained on k components or on the initial data). You can have a look at the Rand Index.
+
+One can test the stability of the clustering obtained by changing the number of components (k+1 or k-1). If the method is stable, one should get the same interpretations as the ones obtained for the clustering with k components. 
+You could first look at the size of the clusters to understand if it varies a lot or not. Then, you could try to use indexes such as the Rand index to compare the clustering and see if individual 1 and 2 for instance are always clustered in the same cluster.
+
+```{r}
+res.famd <-FAMD(diecasting, sup.var =  c(ncol(diecasting)),ncp = 45, graph = FALSE)
+resk45 <- kmeans(res.famd$ind$coord, 4, nstart = 100)
+rand.index(resk$cluster,resk45$cluster)
+```
+
+
+
+__6) The methodology that you have used to describe clusters can also be used to describe a categorical variable, for instance the supplier country. Use the function catdes and explain how this information can be useful for the company.__
+
+```{r}
+rescountry <- catdes(diecasting, num.var=2)$category
+```
+Now, if you want to test whether the Raw.Material=AC 46000  is related to Supplier $France$, let us proceed as follows.
+
+We want to test $H_0$ versus $H_1$:
+
+- $H_0:\ \frac{n_{ms}}{n_s}=\frac{n_m}{n}$ 
+
+- $H_1$: $m$ abnormally overrepresented in Supplier $A$
+
+Under $H_0$, the quantity $N_{ms}$ follows a hypergeometric distribution  $$\mathcal{H}(n_s, \frac{n_m}{n},n).$$
+We can thus compute $$P_{H_0}\left(N_{ms}\ge n_{ms}\right)$$ aand reject the null hypothesis if this last probability is lower than $0.05$. In that case, there is a link between the "PS" and the Supplier $Fra,ce$. 
+It appears that  Supplier $France$ can be characterized by an overrepresentation of Raw.Material AC 46000 .
+
+**7)** _Perform a model to predict the cost. Explain how the previous analysis can help you to interpret the results._
+
+```{r eval=FALSE}
+indtrain <- sample(1:nrow(diecasting), 0.8*nrow( diecasting))
+indtest <-which((!(1:nrow(diecasting))%in%indtrain))
+train <- diecasting[indtrain,]
+reg <- lm(`EXW cost` ~ ., data=train)
+summary(reg)
+model_reduced <- stepAIC(reg, direction = "both")
+summary(model_reduced)
+```
+
+Prediction:
+
+```{r eval = FALSE}
+pred = predict(model_reduced, newdata = diecasting[indtest, -ncol(diecasting)])
+plot(diecasting[indtest, ncol(diecasting)], pred, xlab  = "obs")
+ points(pred, pred, type ="l", col = 2)
+```
+
+Many things can be done, but basically we need to select variables. PCA is very useful because, it help us to understand the correlation between variables and consequently to better understand why some variables are selected or not (indeed, it is possible that a variable highly related to the cost would not be in the final model as it is related to another variable which is in the model).
+However, in view of the quality of prediction there is a lot of work to do to improve this model (remove outliers, other prediction models, etc.)
+
+**8)** _If someone ask you why you did one global model and not one model per supplier, what is your answer?_
+
+This is a tough question. If there are huge differences between suppliers,  a global model is not necessarely appropriate, but have some advantages: you learn for instance the relationship between weight and cost on more observations. In addition for linear models, you estimate the noise variance also with more observations and assume the same noise.
+
+It is possible to include in the global model interactions between suppliers and variables: which means that the effect of variables on the cost depends on the suppliers. 
+
+In this setting the number of observations per supplier is too small to apply this strategy.
+
+If in the future, you may not have the same suppliers, then you can turn to mixed models (see lecture Stat in action semester 2)
+
+**9)** _These data contained missing values. One representative in the compagny suggests either to put 0 in the missing cells or to impute with the median of the variables. Comment. For the categorical variables with missing values, it is decided to create a new category “missing”. Comment._
+
+Both ideas are quite bad: the variability of the imputed data could drastically decrease as well as the potential correlation to other variables. More advanced methods exist (imputation with PCA, etc.) that take into account the similarities between observations and the relationship between variables. 
+
+The second idea is a reasonable strategy to start when we have missing values on the categorical data: it "renames" the `NA` category to a `missing` category and allows to pursue the analysis. It is appropriate especially in some settings:
+For example, in a questionnaire, the question is asked, do you prefer the candidate a, b or c. In the question, there is no possibility to answer "no preference", the questionnaire is incorrectly asked. So NA can correspond to this new category. For missing data of type MNAR also it could be left as a category NA. For example, do you drink alcohol, no, a little, a lot? We can assume that NA corresponds to a lot. If we leave the NA category, it will be close to the category a lot and it will not be a problem for the rest of the analysis. In other cases, more sophisticated techniques such as MCA imputation, which takes into account the relationships between individuals and variables to impute, may be used.
+
+Finally, be careful, these methods are simple imputation methods and multiple imputation methods must be used, to know how much credit to give to the results and to have estimators with good variance.
+
+
